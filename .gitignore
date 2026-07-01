@@ -6,3 +6,4 @@ __pycache__/
 .DS_Store
 *.pw*
 .ipynb_checkpoints/
+/audit.db
