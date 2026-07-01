@@ -5,7 +5,8 @@ from flask import Flask, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-from audit import init_db, log_submission, get_log
+from audit import init_db, log_submission, get_log, submission_exists, has_appeal, log_appeal
+from labels import get_label
 from signals.llm_classifier import classify_text
 from signals.scorer import compute_combined_score
 from signals.stylometry import analyze_text
@@ -23,14 +24,9 @@ limiter = Limiter(
 
 MIN_CONTENT_LENGTH = 50
 
-LABEL_PLACEHOLDERS = {
-    "ai": "AI-Generated / Likely AI",
-    "human": "Human-Written / Likely Human",
-    "uncertain": "Uncertain Attribution",
-}
-
 
 @app.route("/health", methods=["GET"])
+@limiter.limit("60 per minute")
 def health():
     return jsonify({"status": "ok"})
 
@@ -75,7 +71,7 @@ def submit():
         "content_id": content_id,
         "attribution": attribution,
         "confidence": confidence,
-        "label": LABEL_PLACEHOLDERS[attribution],
+        "label": get_label(attribution),
         "signals": {
             "llm": {
                 "score": round(llm_score, 2),
@@ -99,6 +95,38 @@ def log():
     limit = max(1, min(limit, 100))
     entries = get_log(limit=limit)
     return jsonify({"entries": entries, "count": len(entries)})
+
+
+@app.route("/appeal", methods=["POST"])
+@limiter.limit("3 per minute")
+def appeal():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Request body must be valid JSON"}), 400
+
+    content_id = data.get("content_id")
+    if not content_id or not isinstance(content_id, str) or not content_id.strip():
+        return jsonify({"error": "Field 'content_id' is required and must be a non-empty string"}), 400
+    content_id = content_id.strip()
+
+    creator_reasoning = data.get("creator_reasoning")
+    if not creator_reasoning or not isinstance(creator_reasoning, str) or not creator_reasoning.strip():
+        return jsonify({"error": "Field 'creator_reasoning' is required and must be a non-empty string"}), 400
+    creator_reasoning = creator_reasoning.strip()
+
+    if not submission_exists(content_id):
+        return jsonify({"error": "Submission not found"}), 404
+
+    if has_appeal(content_id):
+        return jsonify({"error": "An appeal has already been filed for this submission"}), 409
+
+    log_appeal(content_id, creator_reasoning)
+
+    return jsonify({
+        "content_id": content_id,
+        "status": "under_review",
+        "message": "Appeal received. This submission is now under review.",
+    })
 
 
 if __name__ == "__main__":

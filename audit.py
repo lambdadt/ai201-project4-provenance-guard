@@ -65,3 +65,40 @@ def get_log(limit: int = 20):
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def submission_exists(content_id: str) -> bool:
+    conn = _connect()
+    row = conn.execute(
+        "SELECT 1 FROM audit_log WHERE content_id = ?",
+        (content_id,),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def has_appeal(content_id: str) -> bool:
+    conn = _connect()
+    row = conn.execute(
+        "SELECT appeal_reason FROM audit_log WHERE content_id = ?",
+        (content_id,),
+    ).fetchone()
+    conn.close()
+    return row is not None and row["appeal_reason"] is not None
+
+
+def log_appeal(content_id: str, creator_reasoning: str) -> bool:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    conn = _connect()
+    cursor = conn.execute(
+        """
+        UPDATE audit_log
+        SET status = 'under_review', appeal_reason = ?, appeal_timestamp = ?
+        WHERE content_id = ?
+        """,
+        (creator_reasoning, timestamp, content_id),
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
